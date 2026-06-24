@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environment
+.venv/
+venv/
+.python-version
+
+# uv
+uv.lock
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Project
+output/
+temp_audio/
+*.wav
+*.log
+.progress.json
+
+# Models (downloaded separately)
+models/
+
+# Demo videos
+*.mp4
+*.mkv
+*.mov
+*.avi
+*.flv
+*.wmv
+
+# Secrets
+.env
+*.key
+
+# Design docs (keep local only)
+PRD.md
+SPEC.md
+
+# Claude config (personal)
+.claude/

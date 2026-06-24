@@ -1,0 +1,37 @@
+# ASR Pipeline Default Configuration
+# All paths support both absolute and relative (to this config file) paths.
+
+# --- Input / Output ---
+input_dir: "."                    # Input video directory
+output_dir: "./output"            # Output text/subtitle directory
+temp_dir: null                    # Temp audio directory (null = system temp)
+
+# --- Model ---
+model_path: "./models/faster-whisper-large-v3-turbo-ct2"
+model_size: "large-v3-turbo"      # Model size identifier
+language: "ja"                    # Target language (ISO 639-1)
+beam_size: 5                      # Beam search width (1-10)
+vad_filter: true                  # Voice activity detection
+compute_type: "float16"           # Inference precision: float16 | int8_float16
+
+# --- Concurrency ---
+max_workers: 4                    # Max parallel GPU workers
+chunk_duration: 900               # Split audio > N seconds into chunks for parallel processing (0 = disabled)
+
+# --- Video Scanning ---
+video_extensions:
+  - mp4
+  - mkv
+  - mov
+  - avi
+  - flv
+  - wmv
+
+# --- Output ---
+output_formats:                   # Formats to generate
+  - srt
+  - txt
+  - md
+
+# --- Cleanup ---
+cleanup_temp: true                # Remove temp audio files after completion

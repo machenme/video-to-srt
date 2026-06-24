@@ -1,0 +1,16 @@
+[project]
+name = "asr-pipeline"
+version = "1.0.0"
+description = "Offline batch Japanese video speech-to-text pipeline with GPU parallel inference"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "faster-whisper>=1.0.0",
+    "pyyaml>=6.0",
+    "tqdm>=4.66.0",
+    "nvidia-ml-py>=12.0.0",
+    "nvidia-cublas-cu12>=12.0.0",
+    "nvidia-cuda-runtime-cu12>=12.0.0",
+]
+
+[dependency-groups]
+dev = []

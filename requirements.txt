@@ -1,0 +1,6 @@
+faster-whisper>=1.0.0
+pyyaml>=6.0
+tqdm>=4.66.0
+nvidia-ml-py>=12.0.0
+nvidia-cublas-cu12>=12.0.0
+nvidia-cuda-runtime-cu12>=12.0.0
