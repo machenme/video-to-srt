@@ -3,28 +3,157 @@
 ASR Pipeline CLI — end-to-end video-to-text for Japanese videos.
 
 Usage:
-    uv run python src/main.py --input ./videos --output ./subtitles
-    uv run python src/main.py --input . --output ./output --verbose
+    uv run python -m src.main --input ./videos --output ./subtitles
+    uv run src/main.py --input . --output ./output --verbose
 """
 from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+if __name__ == "__main__" and str(Path(__file__).resolve().parent.parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import argparse
 import logging
 import shutil
 import signal
-import sys
+import threading
 import time
-from pathlib import Path
 
 from src.config import PipelineConfig
 from src.utils import scan_video_files
 from src.audio_extractor import AudioExtractor
 from src.gpu_scheduler import GpuScheduler
-from src.text_formatter import TextFormatter
+from src.text_formatter import Segment, TextFormatter
 from src.task_manager import TaskManager
 from src.monitor import GpuMonitor
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Reusable pipeline function (used by both CLI and GUI)
+# ---------------------------------------------------------------------------
+
+def run_one_video(
+    config: PipelineConfig,
+    video_path: Path,
+    *,
+    progress_callback: callable = None,
+    cancel_event: threading.Event = None,
+) -> tuple[bool, int, str]:
+    """
+    Process a single video through the full pipeline.
+
+    Args:
+        config: Validated PipelineConfig.
+        video_path: Path to the source video file.
+        progress_callback: Optional callable(stage, current, total) for progress.
+        cancel_event: Optional threading.Event; set to request graceful stop.
+
+    Returns:
+        (success, segment_count, error_message)
+    """
+    _check_cancelled = lambda: cancel_event and cancel_event.is_set()
+    temp_dir = config.effective_temp_dir
+    extractor = AudioExtractor(temp_dir)
+
+    # --- Stage 1: Audio extraction + chunking ---
+    if _check_cancelled():
+        return (False, 0, "Cancelled before extraction")
+
+    logger.info(f"Extracting audio: {video_path.name}")
+    if progress_callback:
+        progress_callback("extracting", 0, 100)
+
+    try:
+        wav_path = extractor.extract(video_path)
+    except Exception as exc:
+        return (False, 0, str(exc))
+
+    chunk_sec = config.chunk_duration
+    if chunk_sec > 0:
+        try:
+            chunks = extractor.split_wav(wav_path, chunk_sec)
+        except Exception as exc:
+            return (False, 0, str(exc))
+    else:
+        chunks = [(0.0, wav_path)]
+
+    logger.info(f"Audio ready: {len(chunks)} chunk(s)")
+
+    if _check_cancelled():
+        return (False, 0, "Cancelled after extraction")
+
+    # --- Stage 2: GPU ASR ---
+    gpu_monitor = GpuMonitor(gpu_index=0, interval=1.0)
+    gpu_monitor.start()
+
+    scheduler_tasks = [(cp, video_path) for _, cp in chunks]
+    scheduler = GpuScheduler(config)
+    start_time = time.time()
+
+    if progress_callback:
+        progress_callback("transcribing", 0, len(scheduler_tasks))
+
+    raw_results = scheduler.process(
+        scheduler_tasks,
+        progress_callback=lambda received, total: (
+            progress_callback("transcribing", received, total)
+            if progress_callback else None
+        ),
+    )
+    elapsed = time.time() - start_time
+    gpu_monitor.stop()
+
+    if _check_cancelled():
+        return (False, 0, "Cancelled after transcription")
+
+    # --- Stage 3: Merge & write ---
+    formatter = TextFormatter()
+    output_dir = config.output_dir
+
+    # Collect chunk results
+    chunk_results: list[tuple[float, list[Segment]]] = []
+    all_done = True
+    for offset, chunk_path in chunks:
+        if chunk_path in raw_results:
+            chunk_results.append((offset, raw_results[chunk_path]))
+        else:
+            all_done = False
+
+    if not all_done or not chunk_results:
+        return (False, 0, "Some chunks failed transcription")
+
+    if len(chunk_results) > 1:
+        segments = formatter.combine_chunk_segments(chunk_results)
+        logger.info(f"Combined {len(chunk_results)} chunks → {len(segments)} segments")
+    else:
+        segments = chunk_results[0][1]
+
+    video_out_dir = output_dir / video_path.stem
+    video_out_dir.mkdir(parents=True, exist_ok=True)
+    written = formatter.write_all(
+        segments,
+        base_path=video_out_dir / video_path.stem,
+        formats=config.output_formats,
+    )
+
+    logger.info(
+        f"✓ {video_path.stem}: {len(segments)} segments → "
+        f"{', '.join(p.suffix for p in written)}  ({elapsed:.1f}s)"
+    )
+
+    if progress_callback:
+        progress_callback("done", len(segments), len(segments))
+
+    return (True, len(segments), "")
+
+
+# ---------------------------------------------------------------------------
+# Batch runner (CLI)
+# ---------------------------------------------------------------------------
 
 # Global flag for graceful shutdown
 _shutdown_requested = False
@@ -134,145 +263,49 @@ def main():
 
     logger.info(f"Pending tasks: {len(tasks)} / {len(video_paths)} total")
 
-    # --- Stage 1: Audio extraction + chunking ---
-    temp_dir = config.effective_temp_dir
-    logger.info(f"Temp audio directory: {temp_dir}")
-
-    extractor = AudioExtractor(temp_dir)
-
-    # chunk_jobs: list of (offset, chunk_audio_path, video_path)
-    # For non-chunked videos, offset=0.0 and chunk_audio_path is the full WAV.
-    chunk_jobs: list[tuple[float, Path, Path]] = []
-    # Track which videos need chunk merging: video_path -> list[(offset, Path)]
-    video_chunks: dict[Path, list[tuple[float, Path]]] = {}
+    total_segments = 0
+    failed_count = 0
+    start_time = time.time()
 
     for task in tasks:
         if _shutdown_requested:
             break
-        task_mgr.mark_started(task.video_path, status="extracting")
-        try:
-            wav_path = extractor.extract(task.video_path)
+        task_mgr.mark_started(task.video_path)
+        ok, seg_count, err = run_one_video(config, task.video_path)
+        if ok:
+            task_mgr.mark_done(task.video_path)
+            total_segments += seg_count
+        else:
+            task_mgr.mark_failed(task.video_path, err)
+            failed_count += 1
 
-            # Determine if chunking is beneficial
-            chunk_sec = config.chunk_duration
-            if chunk_sec > 0:
-                chunks = extractor.split_wav(wav_path, chunk_sec)
-            else:
-                chunks = [(0.0, wav_path)]
-
-            video_chunks[task.video_path] = chunks
-            for offset, chunk_path in chunks:
-                chunk_jobs.append((offset, chunk_path, task.video_path))
-        except Exception as exc:
-            task_mgr.mark_failed(task.video_path, str(exc))
-
-    if _shutdown_requested:
-        _graceful_exit(task_mgr, config, 2)
-
-    if not chunk_jobs:
-        logger.error("No audio files extracted. Exiting.")
-        sys.exit(1)
-
-    logger.info(f"Audio extraction complete: {len(chunk_jobs)} chunk(s) ready "
-                f"(from {len(video_chunks)} video(s))")
-
-    # --- Stage 2: GPU ASR ---
-    gpu_monitor = GpuMonitor(gpu_index=0, interval=1.0)
-    gpu_monitor.start()
-
-    # Scheduler works with (audio_path, video_path) — we flatten chunks
-    scheduler_tasks = [(cp, vp) for _, cp, vp in chunk_jobs]
-    scheduler = GpuScheduler(config)
-    start_time = time.time()
-    raw_results = scheduler.process(scheduler_tasks)
     elapsed = time.time() - start_time
 
-    gpu_monitor.stop()
-
-    # --- Stage 3: Merge & write ---
-    formatter = TextFormatter()
-    output_dir = config.output_dir
-
-    total_segments = 0
-
-    for video_path, chunks_info in video_chunks.items():
-        if _shutdown_requested:
-            break
-
-        # Collect chunk results for this video
-        chunk_results: list[tuple[float, list[Segment]]] = []
-        all_chunks_done = True
-        for offset, chunk_path in chunks_info:
-            if chunk_path in raw_results:
-                chunk_results.append((offset, raw_results[chunk_path]))
-            else:
-                all_chunks_done = False
-
-        if not all_chunks_done or not chunk_results:
-            task_mgr.mark_failed(video_path, "Some chunks failed transcription")
-            continue
-
-        # Combine chunk segments with offset correction
-        if len(chunk_results) > 1:
-            segments = formatter.combine_chunk_segments(chunk_results)
-            logger.info(f"Combined {len(chunk_results)} chunks → {len(segments)} segments")
-        else:
-            segments = chunk_results[0][1]
-
-        # Write to per-video subfolder
-        video_out_dir = output_dir / video_path.stem
-        video_out_dir.mkdir(parents=True, exist_ok=True)
-        written = formatter.write_all(
-            segments,
-            base_path=video_out_dir / video_path.stem,
-            formats=config.output_formats,
-        )
-        total_segments += len(segments)
-        task_mgr.mark_done(video_path)
-        logger.info(
-            f"✓ {video_path.stem}: {len(segments)} segments → "
-            f"{', '.join(p.suffix for p in written)}"
-        )
-
-    # Mark failed: any video still pending and not in results
-    for video_path in video_chunks:
-        t = task_mgr._tasks.get(video_path.stem)
-        if t and t.status not in ("done", "failed"):
-            task_mgr.mark_failed(video_path, "No output from ASR worker")
-
-    # --- Save progress (into each video subfolder) ---
-    task_mgr.save_progress()
+    # --- Cleanup ---
+    if config.cleanup_temp and config.effective_temp_dir.exists():
+        try:
+            shutil.rmtree(config.effective_temp_dir)
+        except Exception as exc:
+            logger.warning(f"Failed to clean temp dir: {exc}")
 
     # --- Summary ---
     logger.info(
         f"Pipeline complete in {elapsed:.1f}s | "
-        f"{task_mgr.summary()} | "
-        f"Total segments: {total_segments}"
+        f"Tasks: {task_mgr.done_count}/{task_mgr.total_count} done"
+        + (f", {failed_count} failed" if failed_count else "")
+        + f" | Total segments: {total_segments}"
     )
 
-    # --- Cleanup ---
-    if config.cleanup_temp and temp_dir.exists():
-        try:
-            shutil.rmtree(temp_dir)
-            logger.info(f"Cleaned up temp directory: {temp_dir}")
-        except Exception as exc:
-            logger.warning(f"Failed to clean temp dir: {exc}")
+    # --- Save progress ---
+    task_mgr.save_progress()
 
     # --- Exit code ---
-    if task_mgr.failed_count > 0 and task_mgr.done_count == 0:
-        sys.exit(3)  # fatal
-    elif task_mgr.failed_count > 0:
-        sys.exit(2)  # partial failure
+    if failed_count > 0 and task_mgr.done_count == 0:
+        sys.exit(3)
+    elif failed_count > 0:
+        sys.exit(2)
     else:
-        sys.exit(0)  # success
-
-
-def _graceful_exit(task_mgr: TaskManager, config: PipelineConfig, code: int) -> None:
-    """Save progress and exit cleanly on interrupt."""
-    logger.info("Saving progress before exit...")
-    task_mgr.save_progress()
-    # Don't clean temp on interrupt — user may want to resume
-    sys.exit(code)
+        sys.exit(0)
 
 
 # ---------------------------------------------------------------------------

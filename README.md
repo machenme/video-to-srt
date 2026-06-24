@@ -4,6 +4,7 @@
 
 ## 特性
 
+- **Tkinter 图形界面** — 拖拽视频、一键转写、实时日志、GPU 监控，零命令行操作
 - **GPU 多路并行** — spawn 独立进程，每进程常驻一个 WhisperModel，信号量控制显存
 - **长视频自动切割** — 超过 N 分钟的音频自动切成片段，多 Worker 并行处理，最后合并时间戳
 - **断点续跑** — 中断后重跑自动跳过已完成的视频，进度持久化到 `.progress.json`
@@ -59,8 +60,19 @@ git clone https://huggingface.co/deepdml/faster-whisper-large-v3-turbo-ct2
 
 ## 快速开始
 
+### 图形界面（推荐）
+
 ```bash
-# 处理单个视频
+uv run python -m src.gui
+# 或
+uv run src/gui.py
+```
+
+拖入视频文件 → 点"开始转写" → 完成。
+
+### 命令行
+
+```bash
 uv run python -m src.main --input . --output ./output
 
 # 输出结构：
@@ -291,3 +303,9 @@ ffmpeg 提取时若遇损坏 AAC 流会自动触发 raw-AAC fallback（两步法
 **Q: 字幕时间轴对不上视频？**
 
 子进程 CUDA context 隔离正常时不应出现。若发生，检查 `--chunk-duration` 是否过小导致 chunk 边界过多，或源视频帧率异常。
+
+## 相关项目
+
+生成字幕后如需翻译为双语字幕（如日→中），推荐：
+
+👉 [rockbenben/subtitle-translator](https://github.com/rockbenben/subtitle-translator) — 基于 LLM 的字幕翻译工具，支持多种翻译引擎，可直接导入本工具生成的 SRT 文件进行翻译。

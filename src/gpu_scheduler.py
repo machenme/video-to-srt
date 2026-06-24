@@ -157,15 +157,18 @@ class GpuScheduler:
     def process(
         self,
         tasks: list[tuple[Path, Path]],  # [(audio_path, video_path), ...]
+        *,
+        progress_callback: callable = None,  # (received: int, total: int) -> None
     ) -> dict[Path, list[Segment]]:
         """
         Run ASR transcription on all queued audio files.
 
         Args:
             tasks: List of (audio_path, video_path) tuples to process.
+            progress_callback: Optional callback for progress updates.
 
         Returns:
-            Dict mapping video_path → list of Segments.
+            Dict mapping audio_path → list of Segments.
             Failed tasks are excluded from the dict (errors are logged).
         """
         if not tasks:
@@ -175,7 +178,7 @@ class GpuScheduler:
         self._setup_queues()
         self._start_workers(task_count=len(tasks))
         self._enqueue_tasks(tasks)
-        results = self._collect_results(expected=len(tasks))
+        results = self._collect_results(expected=len(tasks), progress_callback=progress_callback)
         self._shutdown()
         return results
 
@@ -221,7 +224,9 @@ class GpuScheduler:
         for _ in self._workers:
             self._task_queue.put(_SHUTDOWN)
 
-    def _collect_results(self, expected: int) -> dict[Path, list[Segment]]:
+    def _collect_results(
+        self, expected: int, *, progress_callback: callable = None
+    ) -> dict[Path, list[Segment]]:
         """Drain result queue until expected count reached."""
         results: dict[Path, list[Segment]] = {}
         received = 0
@@ -240,6 +245,8 @@ class GpuScheduler:
                     results[audio_path] = payload
 
                 received += 1
+                if progress_callback:
+                    progress_callback(received, expected)
             except Exception:
                 # Timeout — check if workers are still alive
                 alive = sum(1 for w in self._workers if w.is_alive())
@@ -249,6 +256,8 @@ class GpuScheduler:
                 logger.info(
                     f"Transcribing... ({received}/{expected} done, {alive} worker(s) active)"
                 )
+                if progress_callback:
+                    progress_callback(received, expected)
 
         logger.info(
             f"Transcription complete: {len(results)} success, {errors} failed "
