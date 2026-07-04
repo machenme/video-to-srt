@@ -92,7 +92,7 @@ uv run python -m src.main --input . --output ./output
 | `--config` | PATH | `./config.yaml` | 配置文件路径 |
 | `--model` | str | `large-v3-turbo` | 模型：large-v3-turbo / large-v3 / medium |
 | `--workers` | int | 自动 | 最大并行 Worker 数（自动 = floor((VRAM_GB-3)/2.5)） |
-| `--chunk-duration` | int | 900 | 长视频切割阈值（秒），0 = 禁用 |
+| `--chunk-duration` | int | 0 | 手动指定切割时长（秒），0 = 自动均分 |
 | `--temp-dir` | PATH | 系统临时目录 | 临时音频存放路径 |
 | `--language` | str | `auto` | 目标语言（ISO 639-1，auto = 自动检测） |
 | `--beam-size` | int | 5 | Beam Search 宽度 (1-10) |
@@ -121,7 +121,7 @@ vad_filter: true
 compute_type: "float16"
 
 max_workers: null                   # GPU 并行数（null = 自动检测显存计算）
-chunk_duration: 900                # 长视频切割阈值（秒），0 = 禁用
+chunk_duration: 0                   # 0 = 自动均分（按并发数），>0 = 手动秒数
 
 video_extensions:                  # 扫描的扩展名
   - mp4
@@ -148,11 +148,11 @@ uv run python -m src.main --input ./videos --output ./subtitles
 ### 调整并发和切割策略
 
 ```bash
-# 6 路并行 + 10 分钟切割
-uv run python -m src.main --input ./videos --output ./out --workers 6 --chunk-duration 600
+# 自动均分（默认）：视频时长 / 并发数 = 每块时长，确保同时结束
+uv run python -m src.main --input ./videos --output ./out
 
-# 禁用切割（短视频场景）
-uv run python -m src.main --input ./clips --output ./out --chunk-duration 0
+# 手动指定 10 分钟切割
+uv run python -m src.main --input ./videos --output ./out --chunk-duration 600
 ```
 
 ### 断点续跑
@@ -194,9 +194,9 @@ uv run python -m src.main --input ./videos --output ./out --language en
 
 ### 长视频切割机制
 
-对于超过 `chunk_duration` 秒的视频：用 ffmpeg segment muxer 将 WAV 切成固定时长片段 → 所有片段作为独立任务送入 GPU 调度器并行处理 → 每个片段返回带相对时间戳的 segments → `combine_chunk_segments()` 根据片段偏移量还原绝对时间 → 跨 chunk 边界的重叠段自动去重合并。
+**自动模式（默认 `chunk_duration: 0`）**：取视频时长 ÷ 并发数 = 每块时长，确保所有 Worker 分到均匀负载、同时结束，避免"最后一块只有几十秒"的浪费。
 
-不切割时（视频短或 `chunk_duration: 0`），整个 WAV 作为一个任务直接转写。
+**手动模式**：指定固定秒数，ffmpeg segment muxer 切分，适合特殊场景。切出的片段并行送入 GPU 调度器，完成后 `combine_chunk_segments()` 根据偏移量还原绝对时间戳并去重合并。
 
 ## 输出格式
 
@@ -293,11 +293,11 @@ ffmpeg 提取时若遇损坏 AAC 流会自动触发 raw-AAC fallback（两步法
 
 **Q: SRT 字幕太长 / 太短？**
 
-调整 `config.yaml` 的 `chunk_duration`（影响切割粒度）和编辑 `text_formatter.py` 中的 `_MAX_CHARS_PER_SUB`（默认 40）和 `_MAX_SUB_DURATION`（默认 7.0 秒）。
+调整编辑 `text_formatter.py` 中的 `_MAX_CHARS_PER_SUB`（默认 40）和 `_MAX_SUB_DURATION`（默认 7.0 秒）。切割粒度建议用自动模式。
 
 **Q: 字幕时间轴对不上视频？**
 
-子进程 CUDA context 隔离正常时不应出现。若发生，检查 `--chunk-duration` 是否过小导致 chunk 边界过多，或源视频帧率异常。
+子进程 CUDA context 隔离正常时不应出现。若发生，检查源视频帧率是否异常。
 
 ## 相关项目
 

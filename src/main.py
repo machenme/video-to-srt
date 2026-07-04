@@ -73,6 +73,11 @@ def run_one_video(
         return (False, 0, str(exc))
 
     chunk_sec = config.chunk_duration
+    if chunk_sec == 0:
+        # Auto: split evenly by worker count so all workers finish simultaneously
+        dur = extractor.get_duration(wav_path)
+        chunk_sec = max(30, int(dur / config.max_workers))
+        logger.info(f"Auto chunk: duration={dur:.0f}s, workers={config.max_workers} → {chunk_sec}s/chunk")
     if chunk_sec > 0:
         try:
             chunks = extractor.split_wav(wav_path, chunk_sec)

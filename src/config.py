@@ -62,7 +62,7 @@ class PipelineConfig:
     vad_filter: bool = True
     compute_type: str = "float16"
     max_workers: int = 4
-    chunk_duration: int = 900  # seconds; 0 = disabled
+    chunk_duration: int = 0  # seconds; 0 = auto (split evenly by worker count)
     video_extensions: list[str] = field(default_factory=lambda: DEFAULT_VIDEO_EXTENSIONS.copy())
     output_formats: list[str] = field(default_factory=lambda: ["srt"])
     cleanup_temp: bool = True
@@ -125,7 +125,7 @@ class PipelineConfig:
         vad_filter = cli.get("vad_filter", raw.get("vad_filter", True))
         compute_type = cli.get("compute_type") or raw.get("compute_type") or "float16"
         max_workers = int(cli.get("workers") or raw.get("max_workers") or detect_optimal_workers())
-        chunk_duration = int(cli.get("chunk_duration") or raw.get("chunk_duration") or 900)
+        chunk_duration = int(cli.get("chunk_duration") or raw.get("chunk_duration") or 0)
         video_extensions = cli.get("video_extensions") or raw.get("video_extensions") or DEFAULT_VIDEO_EXTENSIONS
         output_formats = cli.get("output_formats") or raw.get("output_formats") or ["srt"]
         cleanup_temp = cli.get("cleanup_temp", raw.get("cleanup_temp", True))
@@ -166,7 +166,7 @@ class PipelineConfig:
         if self.max_workers < 1 or self.max_workers > 8:
             errors.append(f"max_workers must be 1-8, got {self.max_workers}")
         if self.chunk_duration < 0:
-            errors.append(f"chunk_duration must be >= 0, got {self.chunk_duration}")
+            errors.append(f"chunk_duration must be >= 0, got {self.chunk_duration}")  # 0 = auto, >0 = manual seconds
         if self.model_size not in VALID_MODEL_SIZES:
             errors.append(f"model_size must be one of {VALID_MODEL_SIZES}, got {self.model_size}")
         if self.compute_type not in VALID_COMPUTE_TYPES:

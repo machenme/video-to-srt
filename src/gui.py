@@ -301,9 +301,12 @@ class AsrGui:
         self._beam_var = tk.IntVar(value=self._config.beam_size)
         ttk.Spinbox(row2, textvariable=self._beam_var, from_=1, to=10, width=4).pack(side="left", padx=5)
 
-        ttk.Label(row2, text="切割(s):").pack(side="left", padx=(20, 0))
-        self._chunk_var = tk.IntVar(value=self._config.chunk_duration)
-        ttk.Spinbox(row2, textvariable=self._chunk_var, from_=0, to=3600, increment=60, width=5).pack(side="left", padx=5)
+        ttk.Label(row2, text="切割(秒):").pack(side="left", padx=(20, 0))
+        self._chunk_var = tk.StringVar(value="自动")
+        self._chunk_combo = ttk.Combobox(row2, textvariable=self._chunk_var,
+                     values=["自动", "300", "600", "900", "1200", "1800", "3600"],
+                     width=6)
+        self._chunk_combo.pack(side="left", padx=5)
 
         row3 = ttk.Frame(self._adv_frame)
         row3.pack(fill="x", pady=2)
@@ -484,7 +487,7 @@ class AsrGui:
                 "language": self._lang_map[self._lang_var.get()],
                 "beam_size": self._beam_var.get(),
                 "vad_filter": self._vad_var.get(),
-                "chunk_duration": self._chunk_var.get(),
+                "chunk_duration": 0 if self._chunk_var.get() == "自动" else int(self._chunk_var.get()),
                 "output_formats": formats,
             })
         except Exception as exc:

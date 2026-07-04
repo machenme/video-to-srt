@@ -16,7 +16,7 @@ compute_type: "float16"           # Inference precision: float16 | int8_float16
 
 # --- Concurrency ---
 max_workers: null                  # Max parallel GPU workers (null = auto: floor((VRAM_GB-3)/2.5))
-chunk_duration: 900               # Split audio > N seconds into chunks for parallel processing (0 = disabled)
+chunk_duration: 0                  # 0 = auto (split evenly by worker count), >0 = manual seconds
 
 # --- Video Scanning ---
 video_extensions:
