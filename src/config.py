@@ -18,6 +18,32 @@ import yaml
 
 DEFAULT_MODEL_PATH = "./models/faster-whisper-large-v3-turbo-ct2"
 VALID_MODEL_SIZES = {"large-v3-turbo", "large-v3", "medium"}
+
+
+# ---------------------------------------------------------------------------
+# GPU-aware worker count
+# ---------------------------------------------------------------------------
+
+def detect_optimal_workers(gpu_index: int = 0) -> int:
+    """
+    Query GPU total VRAM and compute recommended worker count.
+
+    Formula: floor((VRAM_GB - 3) / 2.5), clamped to [1, 8].
+
+    Returns 1 if GPU detection fails.
+    """
+    try:
+        import pynvml
+        pynvml.nvmlInit()
+        handle = pynvml.nvmlDeviceGetHandleByIndex(gpu_index)
+        mem = pynvml.nvmlDeviceGetMemoryInfo(handle)
+        pynvml.nvmlShutdown()
+
+        vram_gb = mem.total / (1024 ** 3)
+        workers = int((vram_gb - 3) / 2.5)
+        return max(1, min(8, workers))
+    except Exception:
+        return 1
 VALID_COMPUTE_TYPES = {"float16", "int8_float16", "int8"}
 DEFAULT_VIDEO_EXTENSIONS = ["mp4", "mkv", "mov", "avi", "flv", "wmv"]
 
@@ -31,14 +57,14 @@ class PipelineConfig:
     temp_dir: Path | None = None
     model_path: Path = Path(DEFAULT_MODEL_PATH)
     model_size: str = "large-v3-turbo"
-    language: str = "ja"
+    language: str = "auto"
     beam_size: int = 5
     vad_filter: bool = True
     compute_type: str = "float16"
     max_workers: int = 4
     chunk_duration: int = 900  # seconds; 0 = disabled
     video_extensions: list[str] = field(default_factory=lambda: DEFAULT_VIDEO_EXTENSIONS.copy())
-    output_formats: list[str] = field(default_factory=lambda: ["srt", "txt", "md"])
+    output_formats: list[str] = field(default_factory=lambda: ["srt"])
     cleanup_temp: bool = True
     verbose: bool = False
 
@@ -94,14 +120,14 @@ class PipelineConfig:
             model_path = (config_dir / model_path).resolve()
 
         model_size = cli.get("model") or raw.get("model_size") or "large-v3-turbo"
-        language = cli.get("language") or raw.get("language") or "ja"
+        language = cli.get("language") or raw.get("language") or "auto"
         beam_size = int(cli.get("beam_size") or raw.get("beam_size") or 5)
         vad_filter = cli.get("vad_filter", raw.get("vad_filter", True))
         compute_type = cli.get("compute_type") or raw.get("compute_type") or "float16"
-        max_workers = int(cli.get("workers") or raw.get("max_workers") or 4)
+        max_workers = int(cli.get("workers") or raw.get("max_workers") or detect_optimal_workers())
         chunk_duration = int(cli.get("chunk_duration") or raw.get("chunk_duration") or 900)
         video_extensions = cli.get("video_extensions") or raw.get("video_extensions") or DEFAULT_VIDEO_EXTENSIONS
-        output_formats = cli.get("output_formats") or raw.get("output_formats") or ["srt", "txt", "md"]
+        output_formats = cli.get("output_formats") or raw.get("output_formats") or ["srt"]
         cleanup_temp = cli.get("cleanup_temp", raw.get("cleanup_temp", True))
         verbose = cli.get("verbose", raw.get("verbose", False))
 

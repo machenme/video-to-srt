@@ -9,13 +9,13 @@ temp_dir: null                    # Temp audio directory (null = system temp)
 # --- Model ---
 model_path: "./models/faster-whisper-large-v3-turbo-ct2"
 model_size: "large-v3-turbo"      # Model size identifier
-language: "ja"                    # Target language (ISO 639-1)
+language: "auto"                  # Target language (ISO 639-1, "auto" = detect)
 beam_size: 5                      # Beam search width (1-10)
 vad_filter: true                  # Voice activity detection
 compute_type: "float16"           # Inference precision: float16 | int8_float16
 
 # --- Concurrency ---
-max_workers: 4                    # Max parallel GPU workers
+max_workers: null                  # Max parallel GPU workers (null = auto: floor((VRAM_GB-3)/2.5))
 chunk_duration: 900               # Split audio > N seconds into chunks for parallel processing (0 = disabled)
 
 # --- Video Scanning ---
@@ -30,8 +30,6 @@ video_extensions:
 # --- Output ---
 output_formats:                   # Formats to generate
   - srt
-  - txt
-  - md
 
 # --- Cleanup ---
 cleanup_temp: true                # Remove temp audio files after completion

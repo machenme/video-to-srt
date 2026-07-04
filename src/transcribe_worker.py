@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 def transcribe_worker(
     model_path: str,
     audio_path: Path,
-    language: str = "ja",
+    language: str = "auto",
     beam_size: int = 5,
     vad_filter: bool = True,
     compute_type: str = "float16",
@@ -48,11 +48,14 @@ def transcribe_worker(
     # --- load model with fallback ---
     model = _load_model(model_path, compute_type)
 
+    # "auto" → None so faster-whisper auto-detects the language
+    lang = None if language == "auto" else language
+
     logger.info(f"Transcribing: {audio_path.name}")
 
     segments_raw, info = model.transcribe(
         str(audio_path),
-        language=language,
+        language=lang,
         beam_size=beam_size,
         vad_filter=vad_filter,
     )

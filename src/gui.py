@@ -34,7 +34,7 @@ except ImportError:
 
 import tkinter as tk
 
-from src.config import PipelineConfig
+from src.config import PipelineConfig, detect_optimal_workers
 from src.main import run_one_video
 from src.monitor import GpuMonitor
 from src.utils import scan_video_files
@@ -127,6 +127,8 @@ class AsrGui:
             self._config = PipelineConfig.build({"config": "./config.yaml"})
         except Exception:
             self._config = PipelineConfig.build({"input_dir": ".", "output_dir": "./output"})
+        # Detect optimal worker count from GPU VRAM
+        self._optimal_workers = detect_optimal_workers()
 
     # ------------------------------------------------------------------
     # Output directory row
@@ -155,7 +157,7 @@ class AsrGui:
 
         # Treeview
         cols = ("file", "duration", "status")
-        self._tree = ttk.Treeview(frame, columns=cols, show="headings", height=6, selectmode="extended")
+        self._tree = ttk.Treeview(frame, columns=cols, show="headings", height=3, selectmode="extended")
         self._tree.heading("file", text="文件名")
         self._tree.heading("duration", text="时长")
         self._tree.heading("status", text="状态")
@@ -176,7 +178,10 @@ class AsrGui:
         btn_frame.pack(fill="x", pady=(5, 0))
         ttk.Button(btn_frame, text="➕ 添加视频", command=self._add_videos).pack(side="left", padx=2)
         ttk.Button(btn_frame, text="✖ 移除选中", command=self._remove_selected).pack(side="left", padx=2)
-        ttk.Button(btn_frame, text="🗑 清空列表", command=self._clear_videos).pack(side="left", padx=2)
+
+        btn_row2 = ttk.Frame(frame)
+        btn_row2.pack(fill="x", pady=(2, 0))
+        ttk.Button(btn_row2, text="🗑 清空列表", command=self._clear_videos).pack(side="left", padx=2)
 
     def _add_videos(self) -> None:
         files = filedialog.askopenfilenames(
@@ -192,6 +197,9 @@ class AsrGui:
     def _add_video(self, p: Path) -> None:
         if p in self._video_paths:
             return
+        # First video added → default output dir to video's folder
+        if not self._video_paths:
+            self._out_dir_var.set(str(p.parent))
         self._video_paths.append(p)
         dur_str = self._get_duration_str(p)
         self._tree.insert("", "end", iid=str(p), values=(p.name, dur_str, "等待中"))
@@ -245,12 +253,12 @@ class AsrGui:
             return "?"
 
     # ------------------------------------------------------------------
-    # Advanced settings (collapsible)
+    # Advanced settings
     # ------------------------------------------------------------------
 
     def _build_advanced(self) -> None:
         self._adv_frame = ttk.LabelFrame(self.root, text="高级设置", padding=5)
-        # Start collapsed — pack later via toggle
+        self._adv_frame.pack(fill="x", padx=10, pady=(2, 0))
 
         row1 = ttk.Frame(self._adv_frame)
         row1.pack(fill="x", pady=2)
@@ -261,16 +269,33 @@ class AsrGui:
                      width=18, state="readonly").pack(side="left", padx=5)
 
         ttk.Label(row1, text="并发:").pack(side="left", padx=(20, 0))
-        self._workers_var = tk.IntVar(value=self._config.max_workers)
+        self._workers_var = tk.IntVar(value=self._optimal_workers)
         ttk.Spinbox(row1, textvariable=self._workers_var, from_=1, to=8, width=4).pack(side="left", padx=5)
 
         row2 = ttk.Frame(self._adv_frame)
         row2.pack(fill="x", pady=2)
+        # Language display name → ISO code mapping
+        self._lang_map = {
+            "自动检测": "auto",
+            "日语 (ja)": "ja",
+            "中文 (zh)": "zh",
+            "英语 (en)": "en",
+            "韩语 (ko)": "ko",
+            "法语 (fr)": "fr",
+            "德语 (de)": "de",
+            "西班牙语 (es)": "es",
+            "葡萄牙语 (pt)": "pt",
+            "意大利语 (it)": "it",
+            "俄语 (ru)": "ru",
+            "阿拉伯语 (ar)": "ar",
+            "泰语 (th)": "th",
+            "越南语 (vi)": "vi",
+        }
         ttk.Label(row2, text="语言:").pack(side="left")
-        self._lang_var = tk.StringVar(value=self._config.language)
+        self._lang_var = tk.StringVar(value="自动检测")
         ttk.Combobox(row2, textvariable=self._lang_var,
-                     values=["ja", "en", "zh", "ko", "auto"],
-                     width=6, state="readonly").pack(side="left", padx=5)
+                     values=list(self._lang_map.keys()),
+                     width=12, state="readonly").pack(side="left", padx=5)
 
         ttk.Label(row2, text="Beam:").pack(side="left", padx=(20, 0))
         self._beam_var = tk.IntVar(value=self._config.beam_size)
@@ -284,24 +309,12 @@ class AsrGui:
         row3.pack(fill="x", pady=2)
         self._vad_var = tk.BooleanVar(value=self._config.vad_filter)
         ttk.Checkbutton(row3, text="VAD 语音检测", variable=self._vad_var).pack(side="left")
-        self._srt_var = tk.BooleanVar(value="srt" in self._config.output_formats)
+        self._srt_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(row3, text="SRT", variable=self._srt_var).pack(side="left", padx=(10, 0))
-        self._txt_var = tk.BooleanVar(value="txt" in self._config.output_formats)
+        self._txt_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(row3, text="TXT", variable=self._txt_var).pack(side="left", padx=(10, 0))
-        self._md_var = tk.BooleanVar(value="md" in self._config.output_formats)
+        self._md_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(row3, text="MD", variable=self._md_var).pack(side="left", padx=(10, 0))
-
-        # Toggle button
-        self._adv_btn = ttk.Button(self.root, text="▸ 高级设置", command=self._toggle_advanced)
-        self._adv_btn.pack(fill="x", padx=10, pady=(2, 0))
-
-    def _toggle_advanced(self) -> None:
-        if self._adv_frame.winfo_ismapped():
-            self._adv_frame.pack_forget()
-            self._adv_btn.configure(text="▸ 高级设置")
-        else:
-            self._adv_frame.pack(fill="x", padx=10, pady=(2, 0), before=self._adv_btn)
-            self._adv_btn.configure(text="▾ 高级设置")
 
     # ------------------------------------------------------------------
     # GPU status
@@ -320,10 +333,12 @@ class AsrGui:
     def _build_progress(self) -> None:
         f = ttk.Frame(self.root)
         f.pack(fill="x", padx=10, pady=(2, 0))
-        self._progress = ttk.Progressbar(f, mode="determinate", length=400)
+        self._progress = ttk.Progressbar(f, mode="determinate", length=400, maximum=100)
         self._progress.pack(side="left", fill="x", expand=True)
-        self._progress_label = ttk.Label(f, text="就绪", width=25, anchor="e")
-        self._progress_label.pack(side="right", padx=(5, 0))
+        self._file_counter_label = ttk.Label(f, text="", width=8, anchor="e")
+        self._file_counter_label.pack(side="right", padx=(0, 5))
+        self._progress_label = ttk.Label(f, text="就绪", width=12, anchor="e")
+        self._progress_label.pack(side="right", padx=(0, 0))
 
     # ------------------------------------------------------------------
     # Buttons
@@ -345,7 +360,7 @@ class AsrGui:
         frame = ttk.LabelFrame(self.root, text="实时日志", padding=5)
         frame.pack(fill="both", expand=True, padx=10, pady=(5, 0))
 
-        self._log_text = tk.Text(frame, height=8, wrap="word", state="disabled",
+        self._log_text = tk.Text(frame, height=6, wrap="word", state="disabled",
                                   font=("Consolas", 9))
         sb = ttk.Scrollbar(frame, orient="vertical", command=self._log_text.yview)
         self._log_text.configure(yscrollcommand=sb.set)
@@ -406,10 +421,12 @@ class AsrGui:
         """Poll progress queue during pipeline run."""
         while not self._progress_queue.empty():
             try:
-                current, total = self._progress_queue.get_nowait()
-                if total > 0:
-                    self._progress["value"] = (current / total) * 100
-                    self._progress_label.configure(text=f"{current}/{total}")
+                pct, file_idx, total_files = self._progress_queue.get_nowait()
+                pct = max(0.0, min(100.0, pct))
+                self._progress["value"] = pct
+                self._progress_label.configure(text=f"{pct:.2f}%")
+                if total_files > 1:
+                    self._file_counter_label.configure(text=f"({file_idx + 1}/{total_files})")
             except queue.Empty:
                 break
         self.root.after(100, self._poll_progress)
@@ -464,7 +481,7 @@ class AsrGui:
                 "output_dir": self._out_dir_var.get(),
                 "model": self._model_var.get(),
                 "workers": self._workers_var.get(),
-                "language": self._lang_var.get(),
+                "language": self._lang_map[self._lang_var.get()],
                 "beam_size": self._beam_var.get(),
                 "vad_filter": self._vad_var.get(),
                 "chunk_duration": self._chunk_var.get(),
@@ -482,8 +499,9 @@ class AsrGui:
 
         # Reset progress
         self._progress["value"] = 0
-        self._progress["maximum"] = len(self._video_paths)
-        self._progress_label.configure(text=f"0/{len(self._video_paths)}")
+        self._progress_label.configure(text="0.00%")
+        total = len(self._video_paths)
+        self._file_counter_label.configure(text=f"(0/{total})" if total > 1 else "")
         self._status_var.set("转写中...")
 
         # Start pipeline in background thread
@@ -507,16 +525,18 @@ class AsrGui:
 
         for i, video_path in enumerate(self._video_paths):
             if self._cancel.is_set():
-                self._progress_queue.put((i, total))
                 break
+
+            # Reset progress for this file
+            self._progress_queue.put((0.0, i, total))
 
             # Update tree status
             self.root.after(0, lambda p=video_path: self._set_video_status(p, "处理中..."))
 
             ok, seg_count, err = run_one_video(
                 config, video_path,
-                progress_callback=lambda stage, cur, tot, vp=video_path: (
-                    self._progress_queue.put((i + cur / max(tot, 1), total))
+                progress_callback=lambda stage, cur, tot, idx=i, t=total: (
+                    self._progress_queue.put(((cur / max(tot, 1)) * 100, idx, t))
                 ),
                 cancel_event=self._cancel,
             )
@@ -543,7 +563,8 @@ class AsrGui:
         self._start_btn.configure(state="normal")
         self._stop_btn.configure(state="disabled")
         self._progress["value"] = 100
-        self._progress_label.configure(text=f"{done}/{total}")
+        self._progress_label.configure(text="100.00%")
+        self._file_counter_label.configure(text="")
         self._status_var.set(f"✅ 完成: {done}/{total}  (耗时 {elapsed:.0f}s)")
 
         # Open output folder

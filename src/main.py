@@ -132,7 +132,7 @@ def run_one_video(
     else:
         segments = chunk_results[0][1]
 
-    video_out_dir = output_dir / video_path.stem
+    video_out_dir = output_dir
     video_out_dir.mkdir(parents=True, exist_ok=True)
     written = formatter.write_all(
         segments,

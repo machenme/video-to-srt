@@ -1,15 +1,16 @@
-# ASR Pipeline — 视频转日语文本并行处理管线
+# ASR Pipeline — 视频语音转文字并行处理管线
 
 基于 `faster-whisper`（CTranslate2 后端）的离线批量视频语音转文字工具。利用本地 GPU 多路并行推理，支持长视频自动切割、并行转写、分段合并，一键输出 SRT 字幕、纯文本和 Markdown 文件。
 
 ## 特性
 
-- **Tkinter 图形界面** — 拖拽视频、一键转写、实时日志、GPU 监控，零命令行操作
-- **GPU 多路并行** — spawn 独立进程，每进程常驻一个 WhisperModel，信号量控制显存
+- **Tkinter 图形界面** — 拖拽视频、手动选择语言、实时日志、GPU 监控，零命令行操作
+- **语言自动检测** — 默认自动识别视频语言，支持手动指定 14 种语言
+- **GPU 多路并行** — spawn 独立进程，每进程常驻一个 WhisperModel，并发数根据显存自动计算
 - **长视频自动切割** — 超过 N 分钟的音频自动切成片段，多 Worker 并行处理，最后合并时间戳
 - **断点续跑** — 中断后重跑自动跳过已完成的视频，进度持久化到 `.progress.json`
 - **字幕级切分** — SRT 输出按标点 + 时长切分为可读短句（2-7 秒 / 条，≤40 字）
-- **三种输出** — SRT 字幕 + TXT 纯文本 + MD 带时间轴，各司其职
+- **多种输出** — SRT 字幕（默认）+ TXT 纯文本 + MD 带时间轴，可选勾选
 - **全离线** — 模型本地加载，无网络依赖，零数据外泄
 
 ## 硬件要求
@@ -56,7 +57,7 @@ git lfs install
 git clone https://huggingface.co/deepdml/faster-whisper-large-v3-turbo-ct2
 ```
 
-> 单实例 FP16 约 2.5 GB 显存。RTX 5070 Ti 16 GB 可跑 **4 路并行**，余量充足。
+> 单实例 FP16 约 2.5 GB 显存。自动并发公式 `floor((VRAM_GB - 3) / 2.5)`，16 GB 显存自动设为 **5 路并行**。
 
 ## 快速开始
 
@@ -77,10 +78,9 @@ uv run python -m src.main --input . --output ./output
 
 # 输出结构：
 #   output/
-#   └── demo1/                ← 每个视频一个子文件夹
-#       ├── demo1.srt         ← 标准 SRT 字幕
-#       ├── demo1.txt         ← 纯文本（无时间戳）
-#       └── demo1.md          ← Markdown 带 [HH:MM:SS] 时间轴
+#   ├── demo1.srt             ← 标准 SRT 字幕
+#   ├── demo2.srt
+#   └── ...
 ```
 
 ## 命令行参数
@@ -91,10 +91,10 @@ uv run python -m src.main --input . --output ./output
 | `--output` | PATH | **必填** | 输出根目录 |
 | `--config` | PATH | `./config.yaml` | 配置文件路径 |
 | `--model` | str | `large-v3-turbo` | 模型：large-v3-turbo / large-v3 / medium |
-| `--workers` | int | 4 | 最大并行 Worker 数 |
+| `--workers` | int | 自动 | 最大并行 Worker 数（自动 = floor((VRAM_GB-3)/2.5)） |
 | `--chunk-duration` | int | 900 | 长视频切割阈值（秒），0 = 禁用 |
 | `--temp-dir` | PATH | 系统临时目录 | 临时音频存放路径 |
-| `--language` | str | `ja` | 目标语言（ISO 639-1） |
+| `--language` | str | `auto` | 目标语言（ISO 639-1，auto = 自动检测） |
 | `--beam-size` | int | 5 | Beam Search 宽度 (1-10) |
 | `--compute-type` | str | `float16` | 推理精度：float16 / int8_float16 |
 | `--no-vad` | flag | false | 禁用 VAD 语音检测 |
@@ -115,12 +115,12 @@ temp_dir: null                     # 临时音频（null = 系统临时目录）
 
 model_path: "./models/faster-whisper-large-v3-turbo-ct2"
 model_size: "large-v3-turbo"
-language: "ja"
+language: "auto"                  # 自动检测，可手动指定 ja/zh/en/ko/...
 beam_size: 5
 vad_filter: true
 compute_type: "float16"
 
-max_workers: 4                     # GPU 并行数
+max_workers: null                   # GPU 并行数（null = 自动检测显存计算）
 chunk_duration: 900                # 长视频切割阈值（秒），0 = 禁用
 
 video_extensions:                  # 扫描的扩展名
@@ -131,10 +131,8 @@ video_extensions:                  # 扫描的扩展名
   - flv
   - wmv
 
-output_formats:                    # 输出格式
+output_formats:                    # 输出格式（默认仅 SRT，可追加 txt / md）
   - srt
-  - txt
-  - md
 
 cleanup_temp: true                 # 完成后清理临时文件
 ```
@@ -170,6 +168,7 @@ uv run python -m src.main --input ./videos --output ./subtitles --force
 ### 切换语言
 
 ```bash
+# 手动指定语言（默认自动检测）
 uv run python -m src.main --input ./videos --output ./out --language en
 ```
 
@@ -190,10 +189,7 @@ uv run python -m src.main --input ./videos --output ./out --language en
                                     ┌───────────────┼───────────────┐
                                     ▼               ▼               ▼
                                 output/           output/         output/
-                              video_a/          video_b/        video_c/
-                            ├── .srt           ├── .srt        ├── .srt
-                            ├── .txt           ├── .txt        ├── .txt
-                            └── .md            └── .md         └── .md
+                              video_a.srt      video_b.srt     video_c.srt
 ```
 
 ### 长视频切割机制
@@ -255,7 +251,8 @@ uv run python -m src.main --input ./videos --output ./out --language en
 ```
 video-to-text/
 ├── src/
-│   ├── main.py              # CLI 入口，流程编排，信号处理
+│   ├── gui.py                # Tkinter 图形界面入口
+│   ├── main.py               # CLI 入口，流程编排，信号处理
 │   ├── config.py            # YAML 配置加载 / CLI 覆盖 / 校验
 │   ├── audio_extractor.py   # Stage 1: ffmpeg 提取 + 切割 + 容错 fallback
 │   ├── gpu_scheduler.py     # Stage 2: spawn 多进程 + 信号量 GPU 调度
@@ -266,11 +263,9 @@ video-to-text/
 │   └── utils.py             # 文件扫描、SRT 校验、时间戳格式化
 ├── models/                  # 模型文件（需自行下载）
 │   └── faster-whisper-large-v3-turbo-ct2/
-├── output/                  # 输出目录
-│   └── {video_name}/
-│       ├── {video_name}.srt
-│       ├── {video_name}.txt
-│       └── {video_name}.md
+├── output/                  # 输出目录（默认即视频所在目录）
+│   ├── {video_name}.srt
+│   └── ...
 ├── config.yaml              # 默认配置
 ├── requirements.txt         # Python 依赖
 ├── pyproject.toml           # uv 项目配置
@@ -290,7 +285,7 @@ uv pip install nvidia-cublas-cu12 nvidia-cuda-runtime-cu12
 
 **Q: 显存不足 OOM？**
 
-降低 `--workers`。turbo 单实例约 2.5 GB，按 `可用显存 / 2.5` 计算安全值。
+降低 `--workers`。turbo 单实例约 2.5 GB，自动检测公式 `floor((VRAM_GB - 3) / 2.5)`。
 
 **Q: 音视频不同步？**
 
