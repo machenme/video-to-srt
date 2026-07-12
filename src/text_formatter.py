@@ -310,8 +310,10 @@ class TextFormatter:
 
         written: list[Path] = []
         base = Path(base_path)
-        # Strip any existing extension to use stem as base
-        stem = base.stem if base.suffix else base.name
+        # Use the last path component as-is — caller is responsible for passing
+        # a stem (no extension).  Don't re-strip via .stem because filenames
+        # like "123.com.xxx" contain dots that are NOT an output-format suffix.
+        stem = base.name
         parent = base.parent
 
         for fmt_key in formats:
