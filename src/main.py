@@ -22,6 +22,7 @@ import threading
 import time
 
 from src.config import PipelineConfig
+from src.translator import EdgeTranslator, translate_srt, TranslationError
 from src.utils import scan_video_files
 from src.audio_extractor import AudioExtractor
 from src.gpu_scheduler import GpuScheduler
@@ -145,6 +146,26 @@ def run_one_video(
         formats=config.output_formats,
     )
 
+    # --- Stage 3b: Translation (optional) ---
+    translated_path: Path | None = None
+    if config.translate_to:
+        srt_path = video_out_dir / f"{video_path.stem}.srt"
+        if srt_path.exists():
+            logger.info(
+                f"Translating SRT: {srt_path.name} → {config.translate_to}"
+            )
+            try:
+                provider = EdgeTranslator()
+                translated_path = translate_srt(
+                    srt_path,
+                    config.translate_to,
+                    provider=provider,
+                    source_lang=config.language if config.language != "auto" else "auto",
+                )
+                written.append(translated_path)
+            except TranslationError as exc:
+                logger.error(f"Translation failed: {exc}")
+
     logger.info(
         f"✓ {video_path.stem}: {len(segments)} segments → "
         f"{', '.join(p.suffix for p in written)}  ({elapsed:.1f}s)"
@@ -195,6 +216,8 @@ def build_argparser() -> argparse.ArgumentParser:
     p.add_argument("--no-cleanup", action="store_true", help="Keep temp audio files")
     p.add_argument("--chunk-duration", type=int, default=None,
                    help="Split audio > N seconds into chunks for parallel (default 900, 0=disabled)")
+    p.add_argument("--translate", default=None, metavar="LANG",
+                   help="Auto-translate SRT to target language (ISO 639-1, e.g. zh)")
     p.add_argument("--verbose", action="store_true", help="Enable DEBUG logging")
     p.add_argument("--force", action="store_true", help="Re-process all files (ignore checkpoint)")
 
@@ -229,6 +252,7 @@ def main():
         "vad_filter": not cli.no_vad,
         "compute_type": cli.compute_type,
         "chunk_duration": cli.chunk_duration,
+        "translate_to": cli.translate,
         "cleanup_temp": not cli.no_cleanup,
         "verbose": cli.verbose,
     }

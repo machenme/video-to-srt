@@ -65,6 +65,7 @@ class PipelineConfig:
     chunk_duration: int = 0  # seconds; 0 = auto (split evenly by worker count)
     video_extensions: list[str] = field(default_factory=lambda: DEFAULT_VIDEO_EXTENSIONS.copy())
     output_formats: list[str] = field(default_factory=lambda: ["srt"])
+    translate_to: str = ""  # "" = skip translation; non-empty = ISO 639-1 target
     cleanup_temp: bool = True
     verbose: bool = False
 
@@ -128,6 +129,7 @@ class PipelineConfig:
         chunk_duration = int(cli.get("chunk_duration") or raw.get("chunk_duration") or 0)
         video_extensions = cli.get("video_extensions") or raw.get("video_extensions") or DEFAULT_VIDEO_EXTENSIONS
         output_formats = cli.get("output_formats") or raw.get("output_formats") or ["srt"]
+        translate_to = cli.get("translate_to") or raw.get("translate_to") or ""
         cleanup_temp = cli.get("cleanup_temp", raw.get("cleanup_temp", True))
         verbose = cli.get("verbose", raw.get("verbose", False))
 
@@ -145,6 +147,7 @@ class PipelineConfig:
             chunk_duration=chunk_duration,
             video_extensions=list(video_extensions),
             output_formats=list(output_formats),
+            translate_to=translate_to,
             cleanup_temp=cleanup_temp,
             verbose=verbose,
         )

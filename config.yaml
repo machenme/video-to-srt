@@ -30,6 +30,8 @@ video_extensions:
 # --- Output ---
 output_formats:                   # Formats to generate
   - srt
+translate_to: ""                   # Auto-translate SRT to language ("" = skip, e.g. "zh")
 
 # --- Cleanup ---
+
 cleanup_temp: true                # Remove temp audio files after completion

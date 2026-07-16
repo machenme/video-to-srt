@@ -319,6 +319,27 @@ class AsrGui:
         self._md_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(row3, text="MD", variable=self._md_var).pack(side="left", padx=(10, 0))
 
+        row4 = ttk.Frame(self._adv_frame)
+        row4.pack(fill="x", pady=2)
+        # Translation target language
+        self._translate_label_map = {
+            "不翻译": "",
+            "中文 (zh)": "zh",
+            "英语 (en)": "en",
+            "韩语 (ko)": "ko",
+            "日语 (ja)": "ja",
+            "法语 (fr)": "fr",
+            "德语 (de)": "de",
+            "俄语 (ru)": "ru",
+            "西班牙语 (es)": "es",
+            "葡萄牙语 (pt)": "pt",
+        }
+        ttk.Label(row4, text="翻译为:").pack(side="left")
+        self._translate_var = tk.StringVar(value="不翻译")
+        ttk.Combobox(row4, textvariable=self._translate_var,
+                     values=list(self._translate_label_map.keys()),
+                     width=11, state="readonly").pack(side="left", padx=5)
+
     # ------------------------------------------------------------------
     # GPU status
     # ------------------------------------------------------------------
@@ -489,6 +510,7 @@ class AsrGui:
                 "vad_filter": self._vad_var.get(),
                 "chunk_duration": 0 if self._chunk_var.get() == "自动" else int(self._chunk_var.get()),
                 "output_formats": formats,
+                "translate_to": self._translate_label_map[self._translate_var.get()],
             })
         except Exception as exc:
             messagebox.showerror("配置错误", str(exc))
