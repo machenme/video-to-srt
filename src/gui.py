@@ -37,6 +37,7 @@ import tkinter as tk
 from src.config import PipelineConfig, detect_optimal_workers
 from src.main import run_one_video
 from src.monitor import GpuMonitor
+from src.translator import EdgeTranslator, translate_srt, TranslationError
 from src.utils import scan_video_files
 
 
@@ -187,7 +188,7 @@ class AsrGui:
         files = filedialog.askopenfilenames(
             title="选择视频文件",
             filetypes=[
-                ("视频文件", "*.mp4 *.mkv *.mov *.avi *.flv *.wmv"),
+                ("视频/字幕", "*.mp4 *.mkv *.mov *.avi *.flv *.wmv *.srt"),
                 ("所有文件", "*.*"),
             ],
         )
@@ -225,7 +226,7 @@ class AsrGui:
             for part in line.split():
                 p = part.strip("{}")
                 path = Path(p)
-                if path.suffix.lower().lstrip(".") in {"mp4", "mkv", "mov", "avi", "flv", "wmv"}:
+                if path.suffix.lower().lstrip(".") in {"mp4", "mkv", "mov", "avi", "flv", "wmv", "srt"}:
                     self._add_video(path)
 
     def _on_double_click_video(self, event) -> None:
@@ -497,6 +498,13 @@ class AsrGui:
             messagebox.showwarning("无输出格式", "请至少选择一种输出格式（SRT/TXT/MD）。")
             return
 
+        # SRT files require a translation target
+        has_srt = any(p.suffix.lower() == ".srt" for p in self._video_paths)
+        translate_to = self._translate_label_map[self._translate_var.get()]
+        if has_srt and not translate_to:
+            messagebox.showwarning("需要翻译语言", "列表中有 SRT 文件，请选择翻译目标语言。")
+            return
+
         # Update config with GUI values
         try:
             config = PipelineConfig.build({
@@ -543,34 +551,53 @@ class AsrGui:
         self._stop_btn.configure(state="disabled")
 
     def _run_all(self, config: PipelineConfig) -> None:
-        """Process all videos in the list (runs in background thread)."""
+        """Process all videos and SRT files in the list (runs in background thread)."""
         total = len(self._video_paths)
         done_count = 0
         start_time = time.time()
 
-        for i, video_path in enumerate(self._video_paths):
+        for i, file_path in enumerate(self._video_paths):
             if self._cancel.is_set():
                 break
 
             # Reset progress for this file
             self._progress_queue.put((0.0, i, total))
 
-            # Update tree status
-            self.root.after(0, lambda p=video_path: self._set_video_status(p, "处理中..."))
+            is_srt = file_path.suffix.lower() == ".srt"
 
-            ok, seg_count, err = run_one_video(
-                config, video_path,
-                progress_callback=lambda stage, cur, tot, idx=i, t=total: (
-                    self._progress_queue.put(((cur / max(tot, 1)) * 100, idx, t))
-                ),
-                cancel_event=self._cancel,
-            )
-
-            if ok:
-                done_count += 1
-                self.root.after(0, lambda p=video_path, c=seg_count: self._set_video_status(p, f"✅ {c}段"))
+            if is_srt:
+                # --- SRT-only: skip ASR, translate directly ---
+                self.root.after(0, lambda p=file_path: self._set_video_status(p, "翻译中..."))
+                try:
+                    provider = EdgeTranslator()
+                    translate_srt(
+                        file_path, config.translate_to,
+                        provider=provider,
+                        source_lang="auto",
+                    )
+                    self.root.after(0, lambda p=file_path: self._set_video_status(p, "✅ 已翻译"))
+                    done_count += 1
+                    self._progress_queue.put((100.0, i, total))
+                except Exception as exc:
+                    self.root.after(0, lambda p=file_path, e=exc: self._set_video_status(p, f"❌ {str(e)[:30]}"))
+                    self._log(f"⚠ SRT 翻译失败: {file_path.name} — {exc}")
             else:
-                self.root.after(0, lambda p=video_path, e=err: self._set_video_status(p, f"❌ {e[:30]}"))
+                # --- Video: full ASR pipeline ---
+                self.root.after(0, lambda p=file_path: self._set_video_status(p, "处理中..."))
+
+                ok, seg_count, err = run_one_video(
+                    config, file_path,
+                    progress_callback=lambda stage, cur, tot, idx=i, t=total: (
+                        self._progress_queue.put(((cur / max(tot, 1)) * 100, idx, t))
+                    ),
+                    cancel_event=self._cancel,
+                )
+
+                if ok:
+                    done_count += 1
+                    self.root.after(0, lambda p=file_path, c=seg_count: self._set_video_status(p, f"✅ {c}段"))
+                else:
+                    self.root.after(0, lambda p=file_path, e=err: self._set_video_status(p, f"❌ {e[:30]}"))
 
         elapsed = time.time() - start_time
 
