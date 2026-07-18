@@ -119,10 +119,12 @@ def translate_srt(
     results: dict[int, list[str]] = {}
 
     with ThreadPoolExecutor(max_workers=cfg.max_workers) as executor:
-        futures = {
-            executor.submit(_translate_batch, idx, indices): idx
-            for idx, indices in batches
-        }
+        futures: dict[object, int] = {}
+        # Stagger submissions to avoid thundering-herd 429
+        for idx, indices in batches:
+            futures[executor.submit(_translate_batch, idx, indices)] = idx
+            if len(futures) < len(batches):  # not the last one
+                time.sleep(cfg.request_delay)
 
         for future in as_completed(futures):
             batch_idx = futures[future]
@@ -131,12 +133,8 @@ def translate_srt(
                 results[idx] = lines
             except TranslationError:
                 failed_batches.append(batch_idx)
-                # Fill with original text for failed batch
                 _, indices = batches[batch_idx]
                 results[batch_idx] = [texts[i] for i in indices]
-
-            # Rate-limit between submissions (only matters for fast batches)
-            time.sleep(cfg.request_delay)
 
     elapsed = time.time() - start_time
     logger.info(

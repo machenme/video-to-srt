@@ -72,6 +72,6 @@ class TranslateConfig:
     target_lang: str = ""        # "" = skip translation
     source_lang: str = "auto"
     batch_size: int = 50
-    max_workers: int = 4
-    request_delay: float = 0.2   # seconds between batches
+    max_workers: int = 2
+    request_delay: float = 0.5   # seconds between batch submissions
     token_ttl: int = 480         # seconds before token refresh
