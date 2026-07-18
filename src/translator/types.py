@@ -73,5 +73,5 @@ class TranslateConfig:
     source_lang: str = "auto"
     batch_size: int = 50
     max_workers: int = 2
-    request_delay: float = 0.5   # seconds between batch submissions
+    request_delay: float = 3.0   # seconds between batch submissions (Edge API rate-limit)
     token_ttl: int = 480         # seconds before token refresh
